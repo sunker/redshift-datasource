@@ -1,10 +1,10 @@
-package plugin
+package redshift
 
 import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/grafamaina/grafana-aws-sdk/pkg/awsds"
+	"github.com/grafana/grafana-aws-sdk/pkg/awsds"
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 )
 

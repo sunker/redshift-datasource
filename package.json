@@ -1,7 +1,8 @@
 {
-  "name": "redshift",
+  "name": "redshif-datasource",
   "version": "1.0.0",
   "description": "",
+  "repository": "github:sunker/redshift-datasource",
   "scripts": {
     "build": "grafana-toolkit plugin:build",
     "test": "grafana-toolkit plugin:test",
