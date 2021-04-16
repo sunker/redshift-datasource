@@ -14,7 +14,7 @@ func main() {
 	// it wont finish until Grafana shutsdown the process or the plugin choose
 	// to exit close down by itself
 	// err := datasource.Serve(newDatasource())
-	ds := newDatasource()
+	ds := plugin.newDatasource()
 	err := experimental.DoGRPC("redshift", ds)
 
 
