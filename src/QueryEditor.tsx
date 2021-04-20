@@ -1,50 +1,78 @@
 import defaults from 'lodash/defaults';
 
-import React, { ChangeEvent, PureComponent } from 'react';
-import { LegacyForms } from '@grafana/ui';
+import React, { PureComponent } from 'react';
+import { CodeEditor, CodeEditorSuggestionItem, CodeEditorSuggestionItemKind, InfoBox, LegacyForms } from '@grafana/ui';
 import { QueryEditorProps } from '@grafana/data';
 import { DataSource } from './datasource';
-import { defaultQuery, RedShiftDataSourceJsonData, RedShiftQuery } from './types';
+import { defaultQuery, RedShiftDataSourceJsonData, RedshiftQuery } from './types';
+import { getTemplateSrv } from '@grafana/runtime';
 
-const { FormField } = LegacyForms;
-
-type Props = QueryEditorProps<DataSource, RedShiftQuery, RedShiftDataSourceJsonData>;
+type Props = QueryEditorProps<DataSource, RedshiftQuery, RedShiftDataSourceJsonData>;
 
 export class QueryEditor extends PureComponent<Props> {
-  onQueryTextChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const { onChange, query } = this.props;
-    onChange({ ...query, queryText: event.target.value });
+  onRawSqlChange = (rawSql: string) => {
+    const { onChange, query, onRunQuery } = this.props;
+
+    onChange({ ...query, rawSql });
+
+    onRunQuery();
   };
 
-  onConstantChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const { onChange, query, onRunQuery } = this.props;
-    onChange({ ...query, constant: parseFloat(event.target.value) });
-    // executes the query
-    onRunQuery();
+  onChange = (value: RedshiftQuery) => {
+    this.props.onChange(value);
+    this.props.onRunQuery();
+  };
+
+  getSuggestions = (): CodeEditorSuggestionItem[] => {
+    const sugs: CodeEditorSuggestionItem[] = [
+      {
+        label: '$__timeFilter',
+        kind: CodeEditorSuggestionItemKind.Method,
+        detail: '(Macro)',
+      },
+      {
+        label: '$__timeGroup',
+        kind: CodeEditorSuggestionItemKind.Method,
+        detail: '(Macro)',
+      },
+    ];
+
+    const templateSrv = getTemplateSrv();
+    if (templateSrv) {
+      templateSrv.getVariables().forEach(variable => {
+        const label = `{${variable.name}}`;
+        let val = templateSrv!.replace(label);
+        if (val === label) {
+          val = '';
+        }
+        sugs.push({
+          label,
+          kind: CodeEditorSuggestionItemKind.Text,
+          detail: `(Template Variable) ${val}`,
+        });
+      });
+    }
+    return sugs;
   };
 
   render() {
     const query = defaults(this.props.query, defaultQuery);
-    const { queryText, constant } = query;
+    const { rawSql } = query;
 
     return (
-      <div className="gf-form">
-        <FormField
-          width={4}
-          value={constant}
-          onChange={this.onConstantChange}
-          label="Constant"
-          type="number"
-          step="0.1"
+      <>
+        <InfoBox>To save and re-run the query, press ctrl/cmd+S.</InfoBox>
+        <CodeEditor
+          height={'250px'}
+          language="sql"
+          value={rawSql || ''}
+          onBlur={this.onRawSqlChange}
+          onSave={this.onRawSqlChange}
+          showMiniMap={false}
+          showLineNumbers={true}
+          getSuggestions={this.getSuggestions}
         />
-        <FormField
-          labelWidth={8}
-          value={queryText || ''}
-          onChange={this.onQueryTextChange}
-          label="Query Text"
-          tooltip="Not used yet"
-        />
-      </div>
+      </>
     );
   }
 }

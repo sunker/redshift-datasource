@@ -2,11 +2,11 @@ import { DataSourcePlugin } from '@grafana/data';
 import { DataSource } from './datasource';
 import { ConfigEditor } from './ConfigEditor';
 import { QueryEditor } from './QueryEditor';
-import { RedShiftDataSourceJsonData, RedShiftDataSourceSecureJsonData, RedShiftQuery } from './types';
+import { RedShiftDataSourceJsonData, RedShiftDataSourceSecureJsonData, RedshiftQuery } from './types';
 
 export const plugin = new DataSourcePlugin<
   DataSource,
-  RedShiftQuery,
+  RedshiftQuery,
   RedShiftDataSourceJsonData,
   RedShiftDataSourceSecureJsonData
 >(DataSource)
