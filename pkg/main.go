@@ -5,6 +5,7 @@ import (
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 	"github.com/grafana/grafana-plugin-sdk-go/experimental"
+	"github.com/sunker/redshift-datasource/pkg/redshift"
 )
 
 
@@ -14,7 +15,7 @@ func main() {
 	// it wont finish until Grafana shutsdown the process or the plugin choose
 	// to exit close down by itself
 	// err := datasource.Serve(newDatasource())
-	ds := redshift.newDatasource()
+	ds := redshift.NewDatasource()
 	err := experimental.DoGRPC("redshift", ds)
 
 

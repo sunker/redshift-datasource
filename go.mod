@@ -8,3 +8,4 @@ require (
 	github.com/grafana/grafana-aws-sdk v0.5.0
 	github.com/grafana/grafana-plugin-sdk-go v0.92.0
 )
+	

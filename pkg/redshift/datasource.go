@@ -3,12 +3,10 @@ package redshift
 import (
 	"context"
 	"encoding/json"
-	"math/rand"
-	"net/http"
+	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/redshiftdataapiservice"
 	"github.com/grafana/grafana-aws-sdk/pkg/awsds"
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
@@ -16,11 +14,8 @@ import (
 	"github.com/grafana/grafana-plugin-sdk-go/backend/instancemgmt"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 	"github.com/grafana/grafana-plugin-sdk-go/data"
+	"github.com/sunker/redshift-datasource/pkg/models"
 )
-
-
-type clientGetterFunc func(region string, settings backend.DataSourceInstanceSettings) (client *session.Session, err error)
-
 
 // SampleDatasource is an example datasource used to scaffold
 // new datasource plugins with an backend.
@@ -29,23 +24,14 @@ type RedshiftDatasource struct {
 	// of datasource instances in plugins. It's not a requirements
 	// but a best practice that we recommend that you follow.
 	im instancemgmt.InstanceManager
-	getClient clientGetterFunc
 }
 
 // newDatasource returns datasource.ServeOpts.
-func newDatasource() datasource.ServeOpts {
-	sessions := awsds.NewSessionCache()
-	cfg := AWSSiteWiseDataSourceSetting{}
+func NewDatasource() datasource.ServeOpts {
+	im := datasource.NewInstanceManager(newDataSourceInstance)
 
 	ds := &RedshiftDatasource{
-		getClient: func(region string, settings backend.DataSourceInstanceSettings) (swclient *session.Session, err error) {
-			err = cfg.Load(settings)
-			if err != nil {
-				return nil, err
-			}
-			swclient, err = sessions.GetSession(region, cfg.toAWSDatasourceSettings())
-			return
-		},
+		im: im,
 	}
 
 	return datasource.ServeOpts{
@@ -67,7 +53,7 @@ func (td *RedshiftDatasource) QueryData(ctx context.Context, req *backend.QueryD
 
 	// loop over queries and execute them individually.
 	for _, q := range req.Queries {
-		res := td.query(ctx, q)
+		res := td.query(ctx, q, req.PluginContext)
 
 		// save the response in a hashmap
 		// based on with RefID as identifier
@@ -78,10 +64,14 @@ func (td *RedshiftDatasource) QueryData(ctx context.Context, req *backend.QueryD
 }
 
 type queryModel struct {
-	Format string `json:"format"`
+	RawSQL  string `json:"rawSql,omitempty"`
+	// Not from JSON
+	Interval      time.Duration     `json:"-"`
+	TimeRange     backend.TimeRange `json:"-"`
+	MaxDataPoints int64             `json:"-"`
 }
 
-func (td *RedshiftDatasource) query(ctx context.Context, query backend.DataQuery) backend.DataResponse {
+func (ds *RedshiftDatasource) query(ctx context.Context, query backend.DataQuery, pluginContext backend.PluginContext) backend.DataResponse {
 	// Unmarshal the json into our queryModel
 	var qm queryModel
 	response := backend.DataResponse{}
@@ -91,10 +81,38 @@ func (td *RedshiftDatasource) query(ctx context.Context, query backend.DataQuery
 		return response
 	}
 
-	// Log a warning if `Format` is empty.
-	if qm.Format == "" {
-		log.DefaultLogger.Warn("format is empty. defaulting to time series")
+	s, err := ds.getInstance(pluginContext)
+	if err != nil {
+		response.Error = err
+		return response
 	}
+
+	client, err := s.ClientFactory("us-east-2")
+	if err != nil {
+		response.Error = err
+		return response
+	}
+
+	input := &redshiftdataapiservice.ExecuteStatementInput{
+		DbUser: aws.String("cloud-datasources"),
+		Sql	: aws.String(qm.RawSQL),
+		Database: aws.String("dev"),
+		ClusterIdentifier: aws.String("redshift-cluster-grafana"),
+	}
+	res, err := client.ExecuteStatement(input)
+
+	statement, err := client.DescribeStatement(&redshiftdataapiservice.DescribeStatementInput{
+		Id: res.Id,
+	})
+	log.DefaultLogger.Info("QueryData", "statementres", statement.GoString())
+
+	sql, err := client.GetStatementResult(&redshiftdataapiservice.GetStatementResultInput{
+		Id: res.Id,
+	})
+
+	
+
+	log.DefaultLogger.Info("QueryData", "sqlres", sql.GoString())
 
 	// create data frame response
 	frame := data.NewFrame("response")
@@ -115,66 +133,79 @@ func (td *RedshiftDatasource) query(ctx context.Context, query backend.DataQuery
 	return response
 }
 
+
+func (ds *RedshiftDatasource) getInstance(ctx backend.PluginContext) (*instanceSettings, error) {
+	s, err := ds.im.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.(*instanceSettings), nil
+}
+
 // CheckHealth handles health checks sent from Grafana to the plugin.
 // The main use case for these health checks is the test button on the
 // datasource configuration page which allows users to verify that
 // a datasource is working as expected.
-func (td *RedshiftDatasource) CheckHealth(ctx context.Context, req *backend.CheckHealthRequest) (*backend.CheckHealthResult, error) {
-	var status = backend.HealthStatusOk
-	var message = "Data source is working"
+func (ds *RedshiftDatasource) CheckHealth(ctx context.Context, req *backend.CheckHealthRequest) (*backend.CheckHealthResult, error) {
+	s, err := ds.getInstance(req.PluginContext)
+	if err != nil {
+		return &backend.CheckHealthResult{
+			Status:  backend.HealthStatusError,
+			Message: err.Error(),
+		}, nil
+	}
 
+	client, err := s.ClientFactory("us-east-2")
 
-	session, err := td.getClient("us-east-2", *req.PluginContext.DataSourceInstanceSettings)
-	log.DefaultLogger.Info("QueryData", "sessionerr", err)
-
-	cm := redshiftdataapiservice.New(session)
-	
 	input := &redshiftdataapiservice.ExecuteStatementInput{
 		DbUser: aws.String("cloud-datasources"),
-		Sql	: aws.String("select 3"),
+		Sql	: aws.String("select * from public.category"),
 		Database: aws.String("dev"),
 		ClusterIdentifier: aws.String("redshift-cluster-grafana"),
 	}
-	res, err := cm.ExecuteStatement(input)
-	log.DefaultLogger.Info("QueryData", "requesterror", err)
-	log.DefaultLogger.Info("QueryData", "requestres", res.GoString())
-	log.DefaultLogger.Info("QueryData", "requestresid", res.Id)
+	res, err := client.ExecuteStatement(input)
 
-	statement, err := cm.DescribeStatement(&redshiftdataapiservice.DescribeStatementInput{
+	statement, err := client.DescribeStatement(&redshiftdataapiservice.DescribeStatementInput{
 		Id: res.Id,
 	})
-	log.DefaultLogger.Info("QueryData", "statementerror", err)
 	log.DefaultLogger.Info("QueryData", "statementres", statement.GoString())
-	log.DefaultLogger.Info("QueryData", "statementresid", statement.Error)
 
-	sql, err := cm.GetStatementResult(&redshiftdataapiservice.GetStatementResultInput{
+	sql, err := client.GetStatementResult(&redshiftdataapiservice.GetStatementResultInput{
 		Id: res.Id,
 	})
-	log.DefaultLogger.Info("QueryData", "sqlerror", err)
+
 	log.DefaultLogger.Info("QueryData", "sqlres", sql.GoString())
-	log.DefaultLogger.Info("QueryData", "sqlres2", sql.TotalNumRows)
-
-
-
-
-	if rand.Int()%2 == 0 {
-		status = backend.HealthStatusError
-		message = "randomized error"
-	}
 
 	return &backend.CheckHealthResult{
-		Status:  status,
-		Message: message,
+		Status:  backend.HealthStatusOk,
+		Message: "ok",
 	}, nil
 }
 
+type clientFactoryFunc func(region string) (client *redshiftdataapiservice.RedshiftDataAPIService, err error)
+
 type instanceSettings struct {
-	httpClient *http.Client
+	ClientFactory   clientFactoryFunc
+	Settings models.AWSRedshiftDataSourceSetting
 }
 
-func newDataSourceInstance(setting backend.DataSourceInstanceSettings) (instancemgmt.Instance, error) {
+func newDataSourceInstance(s backend.DataSourceInstanceSettings) (instancemgmt.Instance, error) {
+	settings := models.AWSRedshiftDataSourceSetting{}
+	err := settings.Load(s)
+	if err != nil {
+		return nil, fmt.Errorf("error reading settings: %s", err.Error())
+	}
+	sessions := awsds.NewSessionCache()
+
 	return &instanceSettings{
-		httpClient: &http.Client{},
+		Settings: settings,
+		ClientFactory: func(region string) (client *redshiftdataapiservice.RedshiftDataAPIService, err error) {
+			session, err := sessions.GetSession(region, settings.AWSDatasourceSettings)
+			if err != nil {
+				return nil, err
+			}
+			return redshiftdataapiservice.New(session), nil
+		},
 	}, nil
 }
 
